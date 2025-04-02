@@ -5,76 +5,99 @@ from operator import itemgetter
 
 app = Flask(__name__)
 
+# Base URL for the test server
 BASE_URL = "http://20.244.56.144/evaluation-service"
+AUTH_URL = "http://20.244.56.144/evaluation-service/auth"
 
-# Cache to minimize API calls
-user_post_count_cache = {}
-post_comment_count_cache = {}
-latest_posts_cache = []
+# Authorization token
+AUTH_TOKEN = None
+
+
+def get_auth_token():
+    global AUTH_TOKEN
+    if AUTH_TOKEN is None:
+        response = requests.post(AUTH_URL, json={
+            "email": "22051388@kiit.ac.in",
+            "name": "vishesh kumar bhagat",
+            "rollNo": "22051388",
+            "accessCode": "nwpwrZ",
+            "clientID": "d56eb03e-d1eb-4556-9f90-6c6e776b8661",
+            "clientSecret": "MvhXgVnuPjDzCWwT"
+        }, headers={"Content-Type": "application/json"})
+        response.raise_for_status()
+        AUTH_TOKEN = response.json().get("access_token")
+    return AUTH_TOKEN
+
+
+def fetch_users():
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    response = requests.get(f"{BASE_URL}/users", headers=headers)
+    response.raise_for_status()
+    return response.json()["users"]
+
+
+def fetch_user_posts(user_id):
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    response = requests.get(f"{BASE_URL}/users/{user_id}/posts", headers=headers)
+    response.raise_for_status()
+    return response.json()["posts"]
+
+
+def fetch_post_comments(post_id):
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    response = requests.get(f"{BASE_URL}/posts/{post_id}/comments", headers=headers)
+    response.raise_for_status()
+    return response.json()["comments"]
+
 
 @app.route('/users', methods=['GET'])
 def top_users():
-    global user_post_count_cache
+    users = fetch_users()
+    user_post_counts = defaultdict(int)
 
-    # Fetch users
-    users_response = requests.get(f"{BASE_URL}/users")
-    users = users_response.json().get("users", {})
-
-    # Fetch posts for each user and count them
     for user_id in users.keys():
-        if user_id not in user_post_count_cache:
-            posts_response = requests.get(f"{BASE_URL}/users/{user_id}/posts")
-            posts = posts_response.json().get("posts", [])
-            user_post_count_cache[user_id] = len(posts)
+        posts = fetch_user_posts(user_id)
+        user_post_counts[user_id] = len(posts)
 
-    # Sort users by post count and get the top 5
-    top_users = sorted(user_post_count_cache.items(), key=itemgetter(1), reverse=True)[:5]
+    # Get top 5 users with the highest number of posts
+    top_users = sorted(user_post_counts.items(), key=itemgetter(1), reverse=True)[:5]
     result = [{"user_id": user_id, "name": users[user_id], "post_count": count} for user_id, count in top_users]
 
     return jsonify(result)
 
+
 @app.route('/posts', methods=['GET'])
 def top_or_latest_posts():
-    global post_comment_count_cache, latest_posts_cache
-
     post_type = request.args.get('type', 'latest')
 
+    users = fetch_users()
+    all_posts = []
+
+    # Fetch all posts from all users
+    for user_id in users.keys():
+        all_posts.extend(fetch_user_posts(user_id))
+
     if post_type == 'popular':
-        # Fetch all posts and their comment counts
-        if not post_comment_count_cache:
-            users_response = requests.get(f"{BASE_URL}/users")
-            users = users_response.json().get("users", {})
-            for user_id in users.keys():
-                posts_response = requests.get(f"{BASE_URL}/users/{user_id}/posts")
-                posts = posts_response.json().get("posts", [])
-                for post in posts:
-                    post_id = post["id"]
-                    comments_response = requests.get(f"{BASE_URL}/posts/{post_id}/comments")
-                    comments = comments_response.json().get("comments", [])
-                    post_comment_count_cache[post_id] = len(comments)
+        # Fetch comments for each post and count them
+        post_comment_counts = []
+        for post in all_posts:
+            comments = fetch_post_comments(post["id"])
+            post_comment_counts.append({"post": post, "comment_count": len(comments)})
 
-        # Find the post(s) with the maximum number of comments
-        max_comments = max(post_comment_count_cache.values(), default=0)
-        popular_posts = [post_id for post_id, count in post_comment_count_cache.items() if count == max_comments]
+        # Get posts with the maximum number of comments
+        max_comments = max(post_comment_counts, key=lambda x: x["comment_count"])["comment_count"]
+        popular_posts = [entry["post"] for entry in post_comment_counts if entry["comment_count"] == max_comments]
 
-        return jsonify({"popular_posts": popular_posts})
+        return jsonify(popular_posts)
 
     elif post_type == 'latest':
-        # Fetch latest posts
-        if not latest_posts_cache:
-            users_response = requests.get(f"{BASE_URL}/users")
-            users = users_response.json().get("users", {})
-            all_posts = []
-            for user_id in users.keys():
-                posts_response = requests.get(f"{BASE_URL}/users/{user_id}/posts")
-                posts = posts_response.json().get("posts", [])
-                all_posts.extend(posts)
-            latest_posts_cache = sorted(all_posts, key=lambda x: x["id"], reverse=True)[:5]
-
-        return jsonify({"latest_posts": latest_posts_cache})
+        # Sort posts by their IDs (assuming higher IDs are newer)
+        latest_posts = sorted(all_posts, key=lambda x: x["id"], reverse=True)[:5]
+        return jsonify(latest_posts)
 
     else:
-        return jsonify({"error": "Invalid type parameter. Use 'popular' or 'latest'."}), 400
+        return jsonify({"error": "Invalid type parameter. Accepted values are 'latest' or 'popular'."}), 400
+
 
 if __name__ == '__main__':
     app.run(debug=True)
