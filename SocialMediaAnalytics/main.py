@@ -65,6 +65,18 @@ def top_users():
 
     return jsonify(result)
 
+@app.route('/users/<int:user_id>/posts', methods=['GET'])
+def get_user_posts(user_id):
+    users = fetch_users()
+
+    if str(user_id) not in users:
+        return jsonify({"error": "User not found"}), 404
+
+    # Fetch posts for the given user ID
+    posts = fetch_user_posts(user_id)
+
+    return jsonify(posts)
+
 
 @app.route('/posts', methods=['GET'])
 def top_or_latest_posts():
@@ -84,6 +96,9 @@ def top_or_latest_posts():
             comments = fetch_post_comments(post["id"])
             post_comment_counts.append({"post": post, "comment_count": len(comments)})
 
+        if not post_comment_counts:
+            return jsonify([])  # Return an empty list if there are no posts
+
         # Get posts with the maximum number of comments
         max_comments = max(post_comment_counts, key=lambda x: x["comment_count"])["comment_count"]
         popular_posts = [entry["post"] for entry in post_comment_counts if entry["comment_count"] == max_comments]
@@ -98,6 +113,19 @@ def top_or_latest_posts():
     else:
         return jsonify({"error": "Invalid type parameter. Accepted values are 'latest' or 'popular'."}), 400
 
+
+@app.route('/posts/<int:post_id>/comments', methods=['GET'])
+def get_post_comments(post_id):
+    user_id = request.args.get('user_id')
+
+    # Fetch comments for the given post ID
+    comments = fetch_post_comments(post_id)
+
+    if user_id:
+        # Filter comments by the given user ID
+        comments = [comment for comment in comments if comment["user_id"] == int(user_id)]
+
+    return jsonify(comments)
 
 if __name__ == '__main__':
     app.run(debug=True)
